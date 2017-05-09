@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2017, The Linux Foundation. All rights reserved.
  *
  * This program is Mree software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -871,7 +871,7 @@ static void unregister_client_adhoc(uint32_t cl)
 	}
 
 	curr = client->curr;
-	if (curr >= pdata->num_usecases) {
+	if ((curr < 0) || (curr >= pdata->num_usecases)) {
 		MSM_BUS_ERR("Invalid index Defaulting curr to 0");
 		curr = 0;
 	}
@@ -1081,8 +1081,8 @@ static int update_client_paths(struct msm_bus_client *client, bool log_trns,
 			curr_clk =
 				client->pdata->usecase[cur_idx].vectors[i].ib;
 			curr_bw = client->pdata->usecase[cur_idx].vectors[i].ab;
-			MSM_BUS_DBG("%s:ab: %llu ib: %llu\n", __func__,
-					curr_bw, curr_clk);
+			//MSM_BUS_DBG("%s:ab: %llu ib: %llu\n", __func__,
+			//		curr_bw, curr_clk);
 		}
 
 		if (pdata->active_only) {
@@ -1097,8 +1097,8 @@ static int update_client_paths(struct msm_bus_client *client, bool log_trns,
 			slp_bw, curr_clk, curr_bw, lnode, pdata->active_only);
 
 		if (ret) {
-			MSM_BUS_ERR("%s: Update path failed! %d ctx %d\n",
-					__func__, ret, pdata->active_only);
+			//MSM_BUS_ERR("%s: Update path failed! %d ctx %d\n",
+			//		__func__, ret, pdata->active_only);
 			goto exit_update_client_paths;
 		}
 
@@ -1176,7 +1176,7 @@ static int update_request_adhoc(uint32_t cl, unsigned int index)
 	rt_mutex_lock(&msm_bus_adhoc_lock);
 
 	if (!cl) {
-		MSM_BUS_ERR("%s: Invalid client handle %d", __func__, cl);
+		//MSM_BUS_ERR("%s: Invalid client handle %d", __func__, cl);
 		ret = -ENXIO;
 		goto exit_update_request;
 	}
@@ -1190,30 +1190,30 @@ static int update_request_adhoc(uint32_t cl, unsigned int index)
 
 	pdata = client->pdata;
 	if (!pdata) {
-		MSM_BUS_ERR("%s: Client data Null.[client didn't register]",
-				__func__);
+		//MSM_BUS_ERR("%s: Client data Null.[client didn't register]",
+		//		__func__);
 		ret = -ENXIO;
 		goto exit_update_request;
 	}
 
 	if (index >= pdata->num_usecases) {
-		MSM_BUS_ERR("Client %u passed invalid index: %d\n",
-			cl, index);
+		//MSM_BUS_ERR("Client %u passed invalid index: %d\n",
+		//	cl, index);
 		ret = -ENXIO;
 		goto exit_update_request;
 	}
 
 	if (client->curr == index) {
-		MSM_BUS_DBG("%s: Not updating client request idx %d unchanged",
-				__func__, index);
+		//MSM_BUS_DBG("%s: Not updating client request idx %d unchanged",
+		//		__func__, index);
 		goto exit_update_request;
 	}
 
 	if (!strcmp(test_cl, pdata->name))
 		log_transaction = true;
 
-	MSM_BUS_DBG("%s: cl: %u index: %d curr: %d num_paths: %d\n", __func__,
-		cl, index, client->curr, client->pdata->usecase->num_paths);
+	//MSM_BUS_DBG("%s: cl: %u index: %d curr: %d num_paths: %d\n", __func__,
+	//	cl, index, client->curr, client->pdata->usecase->num_paths);
 	msm_bus_dbg_client_data(client->pdata, index , cl);
 	ret = update_client_paths(client, log_transaction, index);
 	if (ret) {

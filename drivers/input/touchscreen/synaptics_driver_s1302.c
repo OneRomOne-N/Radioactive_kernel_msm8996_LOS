@@ -55,6 +55,11 @@
 
 #include "synaptics_s1302_redremote.h"
 //#include <linux/boot_mode.h>
+
+#ifdef CONFIG_BOEFFLA_TOUCH_KEY_CONTROL
+#include <linux/boeffla_touchkey_control.h>
+#endif
+
 enum oem_boot_mode{
 	MSM_BOOT_MODE__NORMAL,
 	MSM_BOOT_MODE__FASTBOOT,
@@ -219,7 +224,6 @@ static void synaptics_ts_probe_func(struct work_struct *w)
 
 static int oem_synaptics_ts_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
-	int i;
 	optimize_data.client = client;
 	optimize_data.dev_id = id;
 	optimize_data.workqueue = create_workqueue("tc_probe_optimize");
@@ -228,12 +232,7 @@ static int oem_synaptics_ts_probe(struct i2c_client *client, const struct i2c_de
 	//spin_lock_irqsave(&oem_lock, flags);
 	if(get_boot_mode() == MSM_BOOT_MODE__NORMAL)
 	{
-		for (i = 0; i < NR_CPUS; i++){
-            TPD_ERR("boot_time: [synaptics_ts_probe] CPU%d is %s\n",i,cpu_is_offline(i)?"offline":"online");
-            if (cpu_online(i) && (i != smp_processor_id()))
-                break;
-	    }
-        queue_delayed_work_on(i != NR_CPUS?i:0,optimize_data.workqueue,&(optimize_data.work),msecs_to_jiffies(300));
+        queue_delayed_work(optimize_data.workqueue,&(optimize_data.work),msecs_to_jiffies(300));
 	}else{
 		queue_delayed_work_on(0,optimize_data.workqueue,&(optimize_data.work),msecs_to_jiffies(300));
 	}
@@ -300,11 +299,13 @@ struct synaptics_ts_data {
 	char manu_name[12];
 
 	struct work_struct pm_work;
+	bool stop_keypad;
 };
+
 
 static int tc_hw_pwron(struct synaptics_ts_data *ts)
 {
-	int rc;
+	int rc = 0;
 
 	//enable the 2v8 power
 	if (!IS_ERR(ts->vdd_2v8)) {
@@ -675,8 +676,6 @@ static bool is_report_key = true;
 #ifdef SUPPORT_VIRTUAL_KEY //WayneChang, 2015/12/29, add flag to enable virtual key
 bool virtual_key_enable;
 EXPORT_SYMBOL(virtual_key_enable);
-struct completion key_cm;
-EXPORT_SYMBOL(key_cm);
 #endif
 static void int_key(struct synaptics_ts_data *ts )
 {
@@ -843,13 +842,16 @@ static void synaptics_ts_report(struct synaptics_ts_data *ts )
         //goto END;
     }
     if( inte & 0x10) {
+#ifdef CONFIG_BOEFFLA_TOUCH_KEY_CONTROL
+		btkc_touch_button();
+#endif
 #if (defined SUPPORT_FOR_COVER_ESD)
         if (ts->cover_reject)
             int_key_cover(ts);
         else
             int_key(ts);
 #else
-        if (!virtual_key_enable) {
+        if (!virtual_key_enable && !ts->stop_keypad) {
             int_key(ts);
         }
 #endif
@@ -1068,39 +1070,39 @@ static int synaptics_s1302_radd_show(struct seq_file *seq, void *offset)
 static ssize_t synaptics_s1302_radd_write(struct file *file, const char __user *buffer, size_t count, loff_t *ppos)
 {
 	int buf[128];
-    int ret,i;
+	int ret,i;
 	struct synaptics_ts_data *ts = tc_g;
-    int temp_block,wbyte;
-    char reg[30];
+	int temp_block,wbyte;
+	char reg[30];
 
-    ret = sscanf(buffer,"%x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x",\
-    &buf[0],&buf[1],&buf[2],&buf[3],&buf[4],&buf[5],&buf[6],&buf[7],&buf[8],&buf[9],\
-    &buf[10],&buf[11],&buf[12],&buf[13],&buf[14],&buf[15],&buf[16],&buf[17]);
-    for (i = 0;i < ret;i++)
-    {
-        printk("buf[i]=0x%x,",buf[i]);
-    }
-    printk("\n");
-    page= buf[0];
-    address = buf[1];
-    temp_block = buf[2];
-    wbyte = buf[3];
-    if (0xFF == temp_block)//the  mark is to write register else read register
-    {
-        for (i=0;i < wbyte;i++)
-        {
-            reg[i] = (char)buf[4+i];
-        }
-        ret = synaptics_rmi4_i2c_write_byte(ts->client,0xff,page);
-        ret = synaptics_rmi4_i2c_write_block(ts->client,(char)address,wbyte,reg);
-        printk("%s write page=0x%x,address=0x%x\n",__func__,page,address);
-        for (i=0;i < wbyte;i++)
-        {
-            printk("reg=0x%x\n",reg[i]);
-        }
-    }
-    else
-        block = temp_block;
+	ret = sscanf(buffer,"%x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x",\
+		&buf[0],&buf[1],&buf[2],&buf[3],&buf[4],&buf[5],&buf[6],&buf[7],&buf[8],&buf[9],\
+		&buf[10],&buf[11],&buf[12],&buf[13],&buf[14],&buf[15],&buf[16],&buf[17]);
+	for (i = 0;i < ret;i++)
+	{
+		printk("buf[i]=0x%x,",buf[i]);
+	}
+	printk("\n");
+	page= buf[0];
+	address = buf[1];
+	temp_block = buf[2];
+	wbyte = buf[3];
+	if (0xFF == temp_block)//the  mark is to write register else read register
+	{
+		for (i=0;i < wbyte;i++)
+		{
+			reg[i] = (char)buf[4+i];
+		}
+		ret = synaptics_rmi4_i2c_write_byte(ts->client,0xff,page);
+		ret = synaptics_rmi4_i2c_write_block(ts->client,(char)address,wbyte,reg);
+		printk("%s write page=0x%x,address=0x%x\n",__func__,page,address);
+		for (i=0;i < wbyte;i++)
+		{
+			printk("reg=0x%x\n",reg[i]);
+		}
+	}
+	else
+	block = temp_block;
 	return count;
 }
 static int synaptics_s1302_radd_open(struct inode *inode, struct file *file)
@@ -1830,7 +1832,7 @@ static void synaptics_suspend_resume(struct work_struct *work)
 
 static int synaptics_parse_dts(struct device *dev, struct synaptics_ts_data *ts)
 {
-	int rc;
+	int rc = 0;
 	int retval;
 	struct device_node *np;
 
@@ -1964,6 +1966,80 @@ static int choice_gpio_function(struct synaptics_ts_data *ts)
 	return ret;
 }
 
+bool s1302_is_keypad_stopped(void)
+{
+	struct synaptics_ts_data *ts = tc_g;
+
+	return ts->stop_keypad;
+}
+
+static void synaptics_input_event(struct input_handle *handle,
+		unsigned int type, unsigned int code, int value)
+{
+	struct synaptics_ts_data *ts = tc_g;
+
+	if (code != BTN_TOOL_FINGER)
+		return;
+
+	/* Disable capacitive keys when user's finger is on touchscreen */
+	ts->stop_keypad = value;
+}
+
+static int synaptics_input_connect(struct input_handler *handler,
+		struct input_dev *dev, const struct input_device_id *id)
+{
+	struct input_handle *handle;
+	int ret;
+
+	handle = kzalloc(sizeof(*handle), GFP_KERNEL);
+	if (!handle)
+		return -ENOMEM;
+
+	handle->dev = dev;
+	handle->handler = handler;
+	handle->name = "s1302_handle";
+
+	ret = input_register_handle(handle);
+	if (ret)
+		goto err2;
+
+	ret = input_open_device(handle);
+	if (ret)
+		goto err1;
+
+	return 0;
+
+err1:
+	input_unregister_handle(handle);
+err2:
+	kfree(handle);
+	return ret;
+}
+
+static void synaptics_input_disconnect(struct input_handle *handle)
+{
+	input_close_device(handle);
+	input_unregister_handle(handle);
+	kfree(handle);
+}
+
+static const struct input_device_id synaptics_input_ids[] = {
+	{
+		.flags = INPUT_DEVICE_ID_MATCH_KEYBIT,
+		.keybit = { [BIT_WORD(BTN_TOOL_FINGER)] =
+				BIT_MASK(BTN_TOOL_FINGER) },
+	},
+	{ },
+};
+
+static struct input_handler synaptics_input_handler = {
+	.event		= synaptics_input_event,
+	.connect	= synaptics_input_connect,
+	.disconnect	= synaptics_input_disconnect,
+	.name		= "syna_input_handler",
+	.id_table	= synaptics_input_ids,
+};
+
 static int synaptics_ts_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
 #ifdef CONFIG_SYNAPTIC_RED
@@ -1988,9 +2064,6 @@ static int synaptics_ts_probe(struct i2c_client *client, const struct i2c_device
 	ts->dev = &client->dev;
 	ts->loading_fw = false;
     tc_g = ts;
-#if (defined SUPPORT_VIRTUAL_KEY)
-    init_completion(&key_cm);
-#endif
     ret = synaptics_dsx_pinctrl_init(ts);
     if (!ret && ts->pinctrl) {
         ret = pinctrl_select_state(ts->pinctrl,
@@ -2028,7 +2101,7 @@ static int synaptics_ts_probe(struct i2c_client *client, const struct i2c_device
 	TPD_ERR("CURRENT_FIRMWARE_ID = 0x%x\n", CURRENT_FIRMWARE_ID);
     sprintf(ts->fw_id,"0x%x",CURRENT_FIRMWARE_ID);
 
-	memset(ts->fw_name,0,TP_FW_NAME_MAX_LEN);
+	memset(ts->fw_name, 0, TP_FW_NAME_MAX_LEN);
 	strcpy(ts->fw_name,"tp/fw_synaptics_touchkey.img");
 	TPD_DEBUG("synatpitcs_fw: fw_name = %s \n",ts->fw_name);
 
@@ -2098,6 +2171,11 @@ static int synaptics_ts_probe(struct i2c_client *client, const struct i2c_device
 		register_remote_device_s1302(premote_data);
     }
 #endif
+
+	ret = input_register_handler(&synaptics_input_handler);
+	if (ret)
+		TPD_ERR("%s: Failed to register input handler\n", __func__);
+
 	TPDTM_DMESG("synaptics_ts_probe s1302: normal end\n");
 	return 0;
 

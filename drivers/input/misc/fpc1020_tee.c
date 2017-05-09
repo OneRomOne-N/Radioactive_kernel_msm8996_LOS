@@ -52,6 +52,10 @@
 #include <linux/notifier.h>
 #endif
 
+#ifdef CONFIG_BOEFFLA_TOUCH_KEY_CONTROL
+#include <linux/boeffla_touchkey_control.h>
+#endif
+
 static unsigned int ignor_home_for_ESD = 0;
 module_param(ignor_home_for_ESD, uint, S_IRUGO | S_IWUSR);
 
@@ -295,12 +299,8 @@ static ssize_t irq_ack(struct device* device,
 	return count;
 }
 static DEVICE_ATTR(irq, S_IRUSR | S_IWUSR, irq_get, irq_ack);
-extern void int_touch(void);
-extern struct completion key_cm;
 extern bool virtual_key_enable;
-
-bool key_home_pressed = false;
-EXPORT_SYMBOL(key_home_pressed);
+extern bool s1302_is_keypad_stopped(void);
 
 static void set_fpc_irq(struct fpc1020_data *fpc1020, bool enable)
 {
@@ -324,25 +324,30 @@ static ssize_t report_home_set(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct  fpc1020_data *fpc1020 = dev_get_drvdata(dev);
-    unsigned long time;
+    	bool ignore_keypad;
+ 
+ 	if (s1302_is_keypad_stopped() || virtual_key_enable)
+ 		ignore_keypad = true;
+ 	else
+ 		ignore_keypad = false;
 
 	if(ignor_home_for_ESD)
 		return -EINVAL;
 	if (!strncmp(buf, "down", strlen("down")))
 	{
-        if(virtual_key_enable){
-                key_home_pressed = true;
-        }else{
-            input_report_key(fpc1020->input_dev,
+        #ifdef CONFIG_BOEFFLA_TOUCH_KEY_CONTROL
+		btkc_touch_button();
+        #endif
+
+        if(!ignore_keypad){
+        input_report_key(fpc1020->input_dev,
                             KEY_HOME, 1);
             input_sync(fpc1020->input_dev);
         }
 	}
 	else if (!strncmp(buf, "up", strlen("up")))
 	{
-        if(virtual_key_enable){
-                key_home_pressed = false;
-        }else{
+        if(!ignore_keypad){
             input_report_key(fpc1020->input_dev,
                             KEY_HOME, 0);
             input_sync(fpc1020->input_dev);
@@ -357,16 +362,7 @@ static ssize_t report_home_set(struct device *dev,
 	}
 	else
 		return -EINVAL;
-    if(virtual_key_enable){
-        if(!key_home_pressed){
-            reinit_completion(&key_cm);
-            time = wait_for_completion_timeout(&key_cm,msecs_to_jiffies(60));
-            if (!time)
-                int_touch();
-        }else{
-            int_touch();
-        }
-    }
+
 	return count;
 }
 static DEVICE_ATTR(report_home, S_IWUSR, NULL, report_home_set);

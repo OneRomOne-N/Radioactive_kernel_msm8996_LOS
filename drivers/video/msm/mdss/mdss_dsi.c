@@ -23,6 +23,7 @@
 #include <linux/regulator/consumer.h>
 #include <linux/leds-qpnp-wled.h>
 #include <linux/clk.h>
+#include <linux/lcd_notify.h>
 #include <linux/uaccess.h>
 #include <linux/msm-bus.h>
 #include <linux/pm_qos.h>
@@ -1943,7 +1944,7 @@ static int __mdss_dsi_dfps_update_clks(struct mdss_panel_data *pdata,
 {
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
 	struct mdss_dsi_ctrl_pdata *sctrl_pdata = NULL;
-	struct mdss_panel_info *pinfo, *spinfo;
+	struct mdss_panel_info *pinfo, *spinfo = NULL;
 	int rc = 0;
 
 	if (pdata == NULL) {
@@ -2092,7 +2093,7 @@ static int __mdss_dsi_dfps_update_clks(struct mdss_panel_data *pdata,
 
 	/* update new fps that at this point is already updated in hw */
 	pinfo->current_fps = new_fps;
-	if (sctrl_pdata) {
+	if (spinfo) {
 		spinfo->current_fps = new_fps;
 	}
 
@@ -2526,6 +2527,7 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 							pdata);
 		break;
 	case MDSS_EVENT_UNBLANK:
+		lcd_notifier_call_chain(LCD_EVENT_ON_START, NULL);
 		if (ctrl_pdata->on_cmds.link_state == DSI_LP_MODE)
 			rc = mdss_dsi_unblank(pdata);
 		break;
@@ -2537,8 +2539,10 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 		if (ctrl_pdata->on_cmds.link_state == DSI_HS_MODE)
 			rc = mdss_dsi_unblank(pdata);
 		pdata->panel_info.esd_rdy = true;
+		lcd_notifier_call_chain(LCD_EVENT_ON_END, NULL);
 		break;
 	case MDSS_EVENT_BLANK:
+		lcd_notifier_call_chain(LCD_EVENT_OFF_START, NULL);
 		power_state = (int) (unsigned long) arg;
 		if (ctrl_pdata->off_cmds.link_state == DSI_HS_MODE)
 			rc = mdss_dsi_blank(pdata, power_state);
@@ -2549,6 +2553,7 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 		if (ctrl_pdata->off_cmds.link_state == DSI_LP_MODE)
 			rc = mdss_dsi_blank(pdata, power_state);
 		rc = mdss_dsi_off(pdata, power_state);
+		lcd_notifier_call_chain(LCD_EVENT_OFF_END, NULL);
 		break;
 	case MDSS_EVENT_CONT_SPLASH_FINISH:
 		if (ctrl_pdata->off_cmds.link_state == DSI_LP_MODE)

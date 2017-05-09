@@ -120,6 +120,10 @@ static int devfreq_update_status(struct devfreq *devfreq, unsigned long freq)
 
 	cur_time = jiffies;
 
+	/* Immediately exit if previous_freq is not initialized yet. */
+	if (!devfreq->previous_freq)
+		goto out;
+
 	prev_lev = devfreq_get_freq_level(devfreq, devfreq->previous_freq);
 	if (prev_lev < 0) {
 		ret = prev_lev;
@@ -358,7 +362,6 @@ void devfreq_interval_update(struct devfreq *devfreq, unsigned int *delay)
 	unsigned int new_delay = *delay;
 
 	mutex_lock(&devfreq->lock);
-	devfreq->profile->polling_ms = new_delay;
 
 	if (devfreq->stop_polling)
 		goto out;
@@ -533,17 +536,19 @@ struct devfreq *devfreq_add_device(struct device *dev,
 	if (devfreq->governor)
 		err = devfreq->governor->event_handler(devfreq,
 					DEVFREQ_GOV_START, NULL);
-	mutex_unlock(&devfreq_list_lock);
 	if (err) {
 		dev_err(dev, "%s: Unable to start governor for the device\n",
 			__func__);
 		goto err_init;
 	}
+	mutex_unlock(&devfreq_list_lock);
 
 	return devfreq;
 
 err_init:
 	list_del(&devfreq->node);
+	mutex_unlock(&devfreq_list_lock);
+
 	device_unregister(&devfreq->dev);
 err_dev:
 	kfree(devfreq);
@@ -809,10 +814,20 @@ static ssize_t governor_store(struct device *dev, struct device_attribute *attr,
 	struct devfreq *df = to_devfreq(dev);
 	int ret;
 	char str_governor[DEVFREQ_NAME_LEN + 1];
-	struct devfreq_governor *governor;
+	const struct devfreq_governor *governor, *prev_gov;
 
 	ret = sscanf(buf, "%" __stringify(DEVFREQ_NAME_LEN) "s", str_governor);
 	if (ret != 1)
+		return -EINVAL;
+
+	/* Governor white list */
+	if (strncmp(str_governor, "bw_hwmon", DEVFREQ_NAME_LEN) &&
+		strncmp(str_governor, "cpufreq", DEVFREQ_NAME_LEN) &&
+		strncmp(str_governor, "performance", DEVFREQ_NAME_LEN) &&
+		strncmp(str_governor, "powersave", DEVFREQ_NAME_LEN) &&
+		strncmp(str_governor, "mem_latency", DEVFREQ_NAME_LEN) &&
+		strncmp(str_governor, "simple_ondemand", DEVFREQ_NAME_LEN) &&
+		strncmp(str_governor, "msm-adreno-tz", DEVFREQ_NAME_LEN))
 		return -EINVAL;
 
 	mutex_lock(&devfreq_list_lock);
@@ -832,12 +847,17 @@ static ssize_t governor_store(struct device *dev, struct device_attribute *attr,
 			goto out;
 		}
 	}
+	prev_gov = df->governor;
 	df->governor = governor;
 	strncpy(df->governor_name, governor->name, DEVFREQ_NAME_LEN);
 	ret = df->governor->event_handler(df, DEVFREQ_GOV_START, NULL);
-	if (ret)
+	if (ret) {
 		dev_warn(dev, "%s: Governor %s not started(%d)\n",
 			 __func__, df->governor->name, ret);
+		df->governor = prev_gov;
+		strncpy(df->governor_name, prev_gov->name, DEVFREQ_NAME_LEN);
+		df->governor->event_handler(df, DEVFREQ_GOV_START, NULL);
+	}
 out:
 	mutex_unlock(&devfreq_list_lock);
 
@@ -912,6 +932,7 @@ static ssize_t polling_interval_store(struct device *dev,
 	if (ret != 1)
 		return -EINVAL;
 
+	df->profile->polling_ms = value;
 	df->governor->event_handler(df, DEVFREQ_GOV_INTERVAL, &value);
 	ret = count;
 
@@ -1068,6 +1089,33 @@ static ssize_t trans_stat_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(trans_stat);
 
+static ssize_t time_in_state_show(struct device *dev, struct device_attribute *attr,
+				char *buf)
+{
+	struct devfreq *devfreq = to_devfreq(dev);
+	ssize_t len;
+	int i, err;
+	unsigned int max_state = devfreq->profile->max_state;
+
+	err = devfreq_update_status(devfreq, devfreq->previous_freq);
+	if (err)
+		return 0;
+
+	len = 0;
+	
+	for (i = 0; i < max_state; i++) {
+		len += sprintf(buf + len, "%u ",
+				devfreq->profile->freq_table[i]);
+		len += sprintf(buf + len, "%u ",
+			jiffies_to_msecs(devfreq->time_in_state[i]));
+	}
+
+	len += sprintf(buf + len, "\n");
+	
+	return len;
+}
+static DEVICE_ATTR_RO(time_in_state);
+
 static struct attribute *devfreq_attrs[] = {
 	&dev_attr_governor.attr,
 	&dev_attr_available_governors.attr,
@@ -1078,6 +1126,7 @@ static struct attribute *devfreq_attrs[] = {
 	&dev_attr_min_freq.attr,
 	&dev_attr_max_freq.attr,
 	&dev_attr_trans_stat.attr,
+	&dev_attr_time_in_state.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(devfreq);
@@ -1090,7 +1139,9 @@ static int __init devfreq_init(void)
 		return PTR_ERR(devfreq_class);
 	}
 
-	devfreq_wq = create_freezable_workqueue("devfreq_wq");
+	devfreq_wq = alloc_workqueue("devfreq_wq",
+			            WQ_HIGHPRI | WQ_UNBOUND | WQ_FREEZABLE |
+			            WQ_MEM_RECLAIM, 0);
 	if (!devfreq_wq) {
 		class_destroy(devfreq_class);
 		pr_err("%s: couldn't create workqueue\n", __FILE__);

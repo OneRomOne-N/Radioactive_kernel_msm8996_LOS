@@ -751,7 +751,7 @@ static long qbt1000_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 {
 	int rc = 0;
 	void __user *priv_arg = (void __user *)arg;
-	struct qbt1000_drvdata *drvdata;
+	struct qbt1000_drvdata *drvdata = file->private_data;
 
 	if (IS_ERR(priv_arg)) {
 		dev_err(drvdata->dev, "%s: invalid user space pointer %lu\n",
@@ -759,7 +759,6 @@ static long qbt1000_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		return -EINVAL;
 	}
 
-	drvdata = file->private_data;
 	pm_runtime_get_sync(drvdata->dev);
 	mutex_lock(&drvdata->mutex);
 	if (((drvdata->sensor_conn_type == SPI) && (!drvdata->clock_state)) ||
@@ -1163,11 +1162,12 @@ static int qbt1000_read_spi_conn_properties(struct device_node *node,
 							      clock_name);
 			if (IS_ERR(drvdata->clocks[index])) {
 				rc = PTR_ERR(drvdata->clocks[index]);
-				if (rc != -EPROBE_DEFER)
+				if (rc != -EPROBE_DEFER) {
 					dev_err(drvdata->dev,
 						"%s: Failed get %s\n",
 						__func__, clock_name);
 					return rc;
+				}
 			}
 
 			if (!strcmp(clock_name, "spi_clk"))

@@ -43,6 +43,11 @@
 #include <linux/type-c_notifier.h>
 #include <linux/wakelock.h>
 #include <linux/proc_fs.h>
+
+#ifdef CONFIG_FORCE_FAST_CHARGE
+#include <linux/fastchg.h>
+#endif
+
 #if defined(CONFIG_FB)
 #include <linux/notifier.h>
 #include <linux/fb.h>
@@ -2069,7 +2074,11 @@ static int smbchg_set_usb_current_max(struct smbchg_chip *chip,
 			}
 			chip->usb_max_current_ma = 500;
 		}
+#ifdef CONFIG_FORCE_FAST_CHARGE
+		if ((force_fast_charge > 0 && current_ma == CURRENT_500_MA) || current_ma == CURRENT_900_MA) {
+#else
 		if (current_ma == CURRENT_900_MA) {
+#endif
 			rc = smbchg_sec_masked_write(chip,
 					chip->usb_chgpth_base + CHGPTH_CFG,
 					CFG_USB_2_3_SEL_BIT, CFG_USB_3);
@@ -5599,7 +5608,7 @@ static void increment_aicl_count(struct smbchg_chip *chip)
 
 static int wait_for_usbin_uv(struct smbchg_chip *chip, bool high)
 {
-	int rc;
+	int rc = 0;
 	int tries = 3;
 	struct completion *completion = &chip->usbin_uv_lowered;
 	bool usbin_uv;
@@ -5629,7 +5638,7 @@ static int wait_for_usbin_uv(struct smbchg_chip *chip, bool high)
 
 static int wait_for_src_detect(struct smbchg_chip *chip, bool high)
 {
-	int rc;
+	int rc = 0;
 	int tries = 3;
 	struct completion *completion = &chip->src_det_lowered;
 	bool src_detect;

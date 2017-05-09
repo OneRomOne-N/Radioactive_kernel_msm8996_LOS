@@ -46,6 +46,10 @@
 #include <linux/timer.h>
 #include <linux/time.h>
 
+#ifdef CONFIG_BOEFFLA_TOUCH_KEY_CONTROL
+#include <linux/boeffla_touchkey_control.h>
+#endif
+
 #ifdef CONFIG_FB
 #include <linux/fb.h>
 #include <linux/notifier.h>
@@ -80,7 +84,6 @@
 #define RESET_ONESECOND
 //#define SUPPORT_GLOVES_MODE
 //#define REPORT_2D_PRESSURE
-#define SUPPORT_VIRTUAL_KEY
 
 
 #define SUPPORT_TP_SLEEP_MODE
@@ -173,13 +176,13 @@ static int gesture_switch = 0;
 #endif
 
 /*********************for Debug LOG switch*******************/
-#define TPD_ERR(a, arg...)  pr_err(TPD_DEVICE ": " a, ##arg)
-#define TPDTM_DMESG(a, arg...)  printk(TPD_DEVICE ": " a, ##arg)
+#define TPD_ERR(a, arg...)  pr_debug(TPD_DEVICE ": " a, ##arg)
+#define TPDTM_DMESG(a, arg...)  pr_debug(TPD_DEVICE ": " a, ##arg)
 
 #define TPD_DEBUG(a,arg...)\
 	do{\
 		if(tp_debug)\
-		pr_err(TPD_DEVICE ": " a,##arg);\
+		pr_debug(TPD_DEVICE ": " a,##arg);\
 	}while(0)
 
 /*---------------------------------------------Global Variable----------------------------------------------*/
@@ -400,19 +403,13 @@ static void synaptics_ts_probe_func(struct work_struct *w)
 
 static int oem_synaptics_ts_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
-	int i;
 	optimize_data.client = client;
 	optimize_data.dev_id = id;
 	optimize_data.workqueue = create_workqueue("tpd_probe_optimize");
 	INIT_DELAYED_WORK(&(optimize_data.work), synaptics_ts_probe_func);
 	TPD_ERR("before on cpu [%d]\n",smp_processor_id());
 
-	for (i = 0; i < NR_CPUS; i++){
-         TPD_ERR("check CPU[%d] is [%s]\n",i,cpu_is_offline(i)?"offline":"online");
-		 if (cpu_online(i) && (i != smp_processor_id()))
-            break;
-    }
-    queue_delayed_work_on(i != NR_CPUS?i:0,optimize_data.workqueue,&(optimize_data.work),msecs_to_jiffies(300));
+    queue_delayed_work(optimize_data.workqueue,&(optimize_data.work),msecs_to_jiffies(300));
 
 	return probe_ret;
 }
@@ -487,9 +484,6 @@ struct synaptics_ts_data {
 	char test_limit_name[TP_FW_NAME_MAX_LEN];
 	char fw_id[12];
 	char manu_name[10];
-#ifdef SUPPORT_VIRTUAL_KEY
-        struct kobject *properties_kobj;
-#endif
 
 	ktime_t timestamp;
 	struct work_struct pm_work;
@@ -528,7 +522,7 @@ static void touch_disable(struct synaptics_ts_data *ts)
 
 static int tpd_hw_pwron(struct synaptics_ts_data *ts)
 {
-	int rc;
+	int rc = 0;
 
 	/***enable the 2v8 power*****/
 	if (!IS_ERR(ts->vdd_2v8)) {
@@ -1279,9 +1273,6 @@ Left2RightSwip:%d Right2LeftSwip:%d Up2DownSwip:%d Down2UpSwip:%d\n",
 #ifdef REPORT_2D_PRESSURE
 static unsigned char pres_value = 1;
 #endif
-#ifdef SUPPORT_VIRTUAL_KEY //WayneChang, 2015/12/02, add for key to abs, simulate key in abs through virtual key system
-extern struct completion key_cm;
-#endif
 void int_touch(void)
 {
 	int ret = -1,i = 0;
@@ -1370,6 +1361,9 @@ void int_touch(void)
 		finger_info <<= 1;
 		finger_status =  points.status & 0x03;
 		if (finger_status) {
+#ifdef CONFIG_BOEFFLA_TOUCH_KEY_CONTROL
+			btkc_touch_start();
+#endif
 			input_mt_slot(ts->input_dev, i);
 			input_mt_report_slot_state(ts->input_dev, MT_TOOL_FINGER, finger_status);
 			input_report_key(ts->input_dev, BTN_TOOL_FINGER, 1);
@@ -1388,7 +1382,6 @@ void int_touch(void)
 #ifndef TYPE_B_PROTOCOL
 			input_mt_sync(ts->input_dev);
 #endif
-            complete(&key_cm);
 			finger_num++;
 			finger_info |= 1 ;
 			//TPD_DEBUG("%s: Finger %d: status = 0x%02x "
@@ -1414,6 +1407,9 @@ void int_touch(void)
 
 	if (finger_num == 0/* && last_status && (check_key <= 1)*/)
 	{
+#ifdef CONFIG_BOEFFLA_TOUCH_KEY_CONTROL
+		btkc_touch_stop();
+#endif
 		input_report_key(ts->input_dev, BTN_TOOL_FINGER, 0);
 #ifndef TYPE_B_PROTOCOL
 		input_mt_sync(ts->input_dev);
@@ -1767,60 +1763,60 @@ static ssize_t synap_read_address(struct file *file, char __user *user_buf, size
 {
 	int ret;
 	char buffer[PAGESIZE];
-    char buf[128];
-    int i;
-    int cnt = 0;
+	char buf[128];
+	int i;
+	int cnt = 0;
 
 	struct synaptics_ts_data *ts = ts_g;
-    TPD_DEBUG("%s page=0x%x,address=0x%x,block=0x%x\n",__func__,page,address,block);
-    cnt += sprintf(&(buffer[cnt]), "page=0x%x,address=0x%x,block=0x%x\n",page,address,block);
-    ret = synaptics_rmi4_i2c_write_byte(ts->client,0xff,page);
-    ret = synaptics_rmi4_i2c_read_block(ts->client,address,block,buf);
-    for (i=0;i < block;i++)
-    {
-        cnt += sprintf(&(buffer[cnt]), "buf[%d]=0x%x\n",i,buf[i]);
-        TPD_DEBUG("buffer[%d]=0x%x\n",i,buffer[i]);
-    }
-    ret = simple_read_from_buffer(user_buf, count, ppos, buffer, strlen(buffer));
+	TPD_DEBUG("%s page=0x%x,address=0x%x,block=0x%x\n",__func__,page,address,block);
+	cnt += sprintf(&(buffer[cnt]), "page=0x%x,address=0x%x,block=0x%x\n",page,address,block);
+	ret = synaptics_rmi4_i2c_write_byte(ts->client,0xff,page);
+	ret = synaptics_rmi4_i2c_read_block(ts->client,address,block,buf);
+	for (i=0;i < block;i++)
+	{
+		cnt += sprintf(&(buffer[cnt]), "buf[%d]=0x%x\n",i,buf[i]);
+		TPD_DEBUG("buffer[%d]=0x%x\n",i,buffer[i]);
+	}
+	ret = simple_read_from_buffer(user_buf, count, ppos, buffer, strlen(buffer));
 	return ret;
 }
 
 static ssize_t synap_write_address(struct file *file, const char __user *buffer, size_t count, loff_t *ppos)
 {
 	int buf[128];
-    int ret,i;
+	int ret,i;
 	struct synaptics_ts_data *ts = ts_g;
-    int temp_block,wbyte;
-    char reg[30];
+	int temp_block,wbyte;
+	char reg[30];
 
-    ret = sscanf(buffer,"%x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x",\
-    &buf[0],&buf[1],&buf[2],&buf[3],&buf[4],&buf[5],&buf[6],&buf[7],&buf[8],&buf[9],\
-    &buf[10],&buf[11],&buf[12],&buf[13],&buf[14],&buf[15],&buf[16],&buf[17]);
-    for (i = 0;i < ret;i++)
-    {
-        TPD_DEBUG("buf[i]=0x%x,",buf[i]);
-    }
-    TPD_DEBUG("\n");
-    page= buf[0];
-    address = buf[1];
-    temp_block = buf[2];
-    wbyte = buf[3];
-    if (0xFF == temp_block)//the  mark is to write register else read register
-    {
-        for (i=0;i < wbyte;i++)
-        {
-            reg[i] = (char)buf[4+i];
-        }
-        ret = synaptics_rmi4_i2c_write_byte(ts->client,0xff,page);
-        ret = synaptics_rmi4_i2c_write_block(ts->client,(char)address,wbyte,reg);
-        TPD_DEBUG("%s write page=0x%x,address=0x%x\n",__func__,page,address);
-        for (i=0;i < wbyte;i++)
-        {
-            TPD_DEBUG("reg=0x%x\n",reg[i]);
-        }
-    }
-    else
-        block = temp_block;
+	ret = sscanf(buffer,"%x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x",\
+		&buf[0],&buf[1],&buf[2],&buf[3],&buf[4],&buf[5],&buf[6],&buf[7],&buf[8],&buf[9],\
+		&buf[10],&buf[11],&buf[12],&buf[13],&buf[14],&buf[15],&buf[16],&buf[17]);
+	for (i = 0;i < ret;i++)
+	{
+		TPD_DEBUG("buf[i]=0x%x,",buf[i]);
+	}
+	TPD_DEBUG("\n");
+	page= buf[0];
+	address = buf[1];
+	temp_block = buf[2];
+	wbyte = buf[3];
+	if (0xFF == temp_block)//the  mark is to write register else read register
+	{
+		for (i=0;i < wbyte;i++)
+		{
+			reg[i] = (char)buf[4+i];
+		}
+		ret = synaptics_rmi4_i2c_write_byte(ts->client,0xff,page);
+		ret = synaptics_rmi4_i2c_write_block(ts->client,(char)address,wbyte,reg);
+		TPD_DEBUG("%s write page=0x%x,address=0x%x\n",__func__,page,address);
+		for (i=0;i < wbyte;i++)
+		{
+			TPD_DEBUG("reg=0x%x\n",reg[i]);
+		}
+	}
+	else
+		block = temp_block;
 	return count;
 }
 
@@ -3989,61 +3985,6 @@ static void synaptics_suspend_resume(struct work_struct *work)
 	}
 }
 
-#ifdef SUPPORT_VIRTUAL_KEY
-#define VK_KEY_X    180
-#define VK_CENTER_Y 2020//2260
-#define VK_WIDTH    170
-#define VK_HIGHT    200
-static ssize_t vk_syna_show(struct kobject *kobj,
-        struct kobj_attribute *attr, char *buf)
-{
-    int len ;
-
-    len =  sprintf(buf,
-            __stringify(EV_KEY) ":" __stringify(KEY_APPSELECT)  ":%d:%d:%d:%d"
-            ":" __stringify(EV_KEY) ":" __stringify(KEY_HOMEPAGE)  ":%d:%d:%d:%d"
-            ":" __stringify(EV_KEY) ":" __stringify(KEY_BACK)  ":%d:%d:%d:%d" "\n",
-            VK_KEY_X,   VK_CENTER_Y, VK_WIDTH, VK_HIGHT,
-            VK_KEY_X*3, VK_CENTER_Y, VK_WIDTH, VK_HIGHT,
-            VK_KEY_X*5, VK_CENTER_Y, VK_WIDTH, VK_HIGHT);
-
-    return len ;
-}
-
-static struct kobj_attribute vk_syna_attr = {
-    .attr = {
-        .name = "virtualkeys."TPD_DEVICE,
-        .mode = S_IRUGO,
-    },
-    .show = &vk_syna_show,
-};
-
-static struct attribute *syna_properties_attrs[] = {
-    &vk_syna_attr.attr,
-    NULL
-};
-
-static struct attribute_group syna_properties_attr_group = {
-    .attrs = syna_properties_attrs,
-};
-static int synaptics_ts_init_virtual_key(struct synaptics_ts_data *ts )
-{
-    int ret = 0;
-
-    /* virtual keys */
-    if(ts->properties_kobj)
-        return 0 ;
-    ts->properties_kobj = kobject_create_and_add("board_properties", NULL);
-    if (ts->properties_kobj)
-        ret = sysfs_create_group(ts->properties_kobj, &syna_properties_attr_group);
-
-    if (!ts->properties_kobj || ret)
-        printk("%s: failed to create board_properties\n", __func__);
-    /* virtual keys */
-    return ret;
-}
-#endif
-
 static int synaptics_ts_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
 #ifdef CONFIG_SYNAPTIC_RED
@@ -4120,8 +4061,8 @@ static int synaptics_ts_probe(struct i2c_client *client, const struct i2c_device
 	TP_FW = CURRENT_FIRMWARE_ID;
 	sprintf(ts->fw_id,"0x%x",TP_FW);
 
-	memset(ts->fw_name,0,TP_FW_NAME_MAX_LEN);
-	memset(ts->test_limit_name,0,TP_FW_NAME_MAX_LEN);
+	memset(ts->fw_name, 0, TP_FW_NAME_MAX_LEN);
+	memset(ts->test_limit_name, 0, TP_FW_NAME_MAX_LEN);
 
 	//sprintf(ts->manu_name, "TP_SYNAPTICS");
 	synaptics_rmi4_i2c_read_block(ts->client, F01_RMI_QUERY11,10, ts->manu_name);
@@ -4247,9 +4188,6 @@ static int synaptics_ts_probe(struct i2c_client *client, const struct i2c_device
 		TPDTM_DMESG("driver_create_file failt\n");
 		goto exit_init_failed;
 	}
-#ifdef SUPPORT_VIRTUAL_KEY
-    synaptics_ts_init_virtual_key(ts);
-#endif
 #ifdef CONFIG_SYNAPTIC_RED
 	premote_data = remote_alloc_panel_data();
 	if(premote_data) {

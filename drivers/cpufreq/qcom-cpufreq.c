@@ -28,6 +28,14 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <trace/events/power.h>
+#include <soc/qcom/socinfo.h>
+
+// AP: Default startup frequencies
+#define CONFIG_CPU_FREQ_MIN_CLUSTER1	307200
+#define CONFIG_CPU_FREQ_MAX_CLUSTER1	1516800
+#define CONFIG_CPU_FREQ_MIN_CLUSTER2	307200
+#define CONFIG_CPU_FREQ_MAX_CLUSTER2	2150400
+#define CONFIG_CPU_FREQ_MAX_CLUSTER2PRO	2342400
 
 static DEFINE_MUTEX(l2bw_lock);
 
@@ -107,6 +115,10 @@ static int msm_cpufreq_target(struct cpufreq_policy *policy,
 
 	ret = set_cpu_freq(policy, table[index].frequency,
 			   table[index].driver_data);
+#ifdef CONFIG_MSM_TRACK_FREQ_TARGET_INDEX
+	if (!ret)
+		policy->cur_index = index;
+#endif
 done:
 	mutex_unlock(&per_cpu(suspend_data, policy->cpu).suspend_mutex);
 	return ret;
@@ -144,7 +156,41 @@ static int msm_cpufreq_init(struct cpufreq_policy *policy)
 			cpumask_set_cpu(cpu, policy->cpus);
 
 	if (cpufreq_frequency_table_cpuinfo(policy, table))
+	{
+		// AP: set default frequencies to prevent overclocking or underclocking during start
+		if (policy->cpu <= 1)
+		{
+		   policy->cpuinfo.min_freq = CONFIG_CPU_FREQ_MIN_CLUSTER1;
+		   policy->cpuinfo.max_freq = CONFIG_CPU_FREQ_MAX_CLUSTER1;
+		}
+
+		if (policy->cpu >= 2)
+		{
+			policy->cpuinfo.min_freq = CONFIG_CPU_FREQ_MIN_CLUSTER2;
+			if (socinfo_get_id() == 305)
+				policy->cpuinfo.max_freq = CONFIG_CPU_FREQ_MAX_CLUSTER2PRO;
+			else
+				policy->cpuinfo.max_freq = CONFIG_CPU_FREQ_MAX_CLUSTER2;
+		}
+
 		pr_err("cpufreq: failed to get policy min/max\n");
+	}
+
+	// AP: set default frequencies to prevent overclocking or underclocking during start
+	if (policy->cpu <= 1)
+	{
+       policy->min = CONFIG_CPU_FREQ_MIN_CLUSTER1;
+       policy->max = CONFIG_CPU_FREQ_MAX_CLUSTER1;
+	}
+
+	if (policy->cpu >= 2)
+	{
+		policy->min = CONFIG_CPU_FREQ_MIN_CLUSTER2;
+		if (socinfo_get_id() == 305)
+			policy->max = CONFIG_CPU_FREQ_MAX_CLUSTER2PRO;
+		else
+			policy->max = CONFIG_CPU_FREQ_MAX_CLUSTER2;
+	}
 
 	cur_freq = clk_get_rate(cpu_clk[policy->cpu])/1000;
 
@@ -168,6 +214,9 @@ static int msm_cpufreq_init(struct cpufreq_policy *policy)
 			policy->cpu, cur_freq, table[index].frequency);
 	policy->cur = table[index].frequency;
 	policy->freq_table = table;
+#ifdef CONFIG_MSM_TRACK_FREQ_TARGET_INDEX
+	policy->cur_index = index;
+#endif
 
 	return 0;
 }
